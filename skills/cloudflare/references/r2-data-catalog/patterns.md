@@ -1,8 +1,6 @@
 # R2 Data Catalog Patterns
 
-Practical workflows with PyIceberg (lightweight, no JVM) and PySpark (full Iceberg ecosystem).
-
-## Choosing PyIceberg vs PySpark
+Code templates with PyIceberg (lightweight, no JVM) and PySpark (full Iceberg ecosystem). For per-engine config (DuckDB, Trino, Snowflake, StarRocks) and partitioning/maintenance best practices, pull `https://developers.cloudflare.com/r2/data-catalog/config-examples/` and `.../table-maintenance/`.
 
 | Need | Tool |
 |------|------|
@@ -10,7 +8,7 @@ Practical workflows with PyIceberg (lightweight, no JVM) and PySpark (full Icebe
 | Batch ETL, INSERT INTO SELECT, DELETE/MERGE, write-back, >1 TB maintenance | PySpark |
 | Pure SQL analytics (no writes) | [R2 SQL](../r2-sql/) |
 
-## PyIceberg Connection
+## PyIceberg: Connect, Create, Load
 
 ```python
 import os, pyarrow as pa
@@ -23,24 +21,14 @@ catalog = RestCatalog(
     token=os.environ["R2_TOKEN"],
 )
 catalog.create_namespace_if_not_exists("analytics")
-```
 
-## Pattern: Create + Load (PyIceberg)
-
-```python
-schema = pa.schema([
-    ("id", pa.int64()),
-    ("name", pa.string()),
-    ("amount", pa.float64()),
-])
+schema = pa.schema([("id", pa.int64()), ("name", pa.string()), ("amount", pa.float64())])
 table = catalog.create_table(("analytics", "events"), schema=schema)
-
-data = pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"], "amount": [80.0, 92.5, 88.0]})
-table.append(data)
+table.append(pa.table({"id": [1, 2], "name": ["a", "b"], "amount": [80.0, 92.5]}))
 print(table.scan().to_arrow().to_pandas())
 ```
 
-## Pattern: Partitioned Time-Series Table (PyIceberg)
+## PyIceberg: Partitioned Time-Series Table
 
 ```python
 from pyiceberg.schema import Schema
@@ -55,14 +43,12 @@ schema = Schema(
 )
 spec = PartitionSpec(PartitionField(source_id=1, field_id=1000, transform=DayTransform(), name="day"))
 table = catalog.create_table(("logs", "app_logs"), schema=schema, partition_spec=spec)
-
-# Partition pruning on read
-errors = table.scan(row_filter="level = 'ERROR'").to_pandas()
+errors = table.scan(row_filter="level = 'ERROR'").to_pandas()   # partition pruning
 ```
 
 ## PySpark Session
 
-Requires Iceberg **1.6.1** and vended credentials. S3 keys are only needed for orphan-file removal.
+Verified template — requires Iceberg **1.6.1** and vended credentials. S3 keys are only needed for orphan-file removal. (If this drifts, cross-check `config-examples/spark-python/`.)
 
 ```python
 from pyspark.sql import SparkSession
@@ -91,41 +77,26 @@ spark = SparkSession.builder \
 spark.sql("USE r2dc")
 ```
 
-> `X-Iceberg-Access-Delegation: vended-credentials` is required and `s3.remote-signing-enabled` must be `false`. First startup takes ~30–60s for JAR downloads (cached after).
+> `X-Iceberg-Access-Delegation: vended-credentials` is required; `s3.remote-signing-enabled` must be `false`. First startup ~30–60s for JAR downloads (cached after).
 
-## Pattern: Batch ETL (PySpark)
+## PySpark: Batch ETL
 
 ```python
-# Create partitioned table
 spark.sql("""
 CREATE TABLE IF NOT EXISTS my_ns.events (
     __ingest_ts TIMESTAMP, event_id STRING, category STRING, amount DOUBLE
 ) PARTITIONED BY (days(__ingest_ts))
 """)
 
-# Load from CSV / Parquet
 spark.read.option("header","true").csv("data.csv").writeTo("my_ns.events").append()
 spark.read.parquet("data.parquet").writeTo("my_ns.events").append()
-
-# Transform between tables
 spark.sql("INSERT INTO my_ns.target SELECT col1, col2 FROM my_ns.source WHERE col1 > 0")
-
-# Delete / overwrite
 spark.sql("DELETE FROM my_ns.events WHERE amount < 0")
-spark.sql("INSERT OVERWRITE my_ns.events SELECT * FROM my_ns.staging")
 ```
 
-> **Partition large tables** (`PARTITIONED BY (days(__ingest_ts))` or similar). Unpartitioned tables work for small datasets (<1000 files) but degrade at scale.
+> Partition large tables (`PARTITIONED BY (days(__ingest_ts))`). Unpartitioned works for small datasets (<1000 files) but degrades at scale.
 
-## Pattern: Inspect Metadata Tables (PySpark)
-
-```python
-spark.sql("SELECT * FROM my_ns.events.snapshots").show()
-spark.sql("SELECT * FROM my_ns.events.files").show()
-spark.sql("SELECT * FROM my_ns.events.history").show()
-```
-
-## Pattern: Concurrent Writes with Retry
+## Concurrent Writes with Retry (PyIceberg)
 
 ```python
 from pyiceberg.exceptions import CommitFailedException
@@ -140,38 +111,12 @@ def append_with_retry(table, data, max_retries=3):
             time.sleep(2 ** attempt)
 ```
 
-Optimistic locking: concurrent commits to the same table may conflict. Writes to different partitions are safe.
-
-## Pattern: DuckDB over Catalog Data
-
-```python
-import duckdb
-arrow = catalog.load_table(("logs", "app_logs")).scan().to_arrow()
-con = duckdb.connect(); con.register("logs", arrow)
-con.execute("SELECT level, COUNT(*) FROM logs GROUP BY level").fetchdf()
-```
+Optimistic locking: concurrent commits to the same table may conflict; different-partition writes are safe.
 
 ## Connecting Any Iceberg Engine
 
-Snowflake, Trino, Spark, DuckDB, etc. connect with the **Iceberg REST catalog** config:
-
-- Catalog URI: `https://catalog.cloudflarestorage.com/{ACCOUNT_ID}/{BUCKET}`
-- Warehouse: `{ACCOUNT_ID}_{BUCKET}`
-- Token: your R2 API token
-- Header: `X-Iceberg-Access-Delegation: vended-credentials`
-
-## Best Practices
-
-| Area | Guidance |
-|------|----------|
-| Partitioning | Day/hour for time-series; 100–1000 partitions; avoid high-cardinality keys (user_id) |
-| File sizes | Target 128–512 MB; rely on automatic compaction |
-| Schema | Add columns nullable (`required=False`); only widen types |
-| Maintenance | Enable automatic compaction + snapshot expiration (see [configuration.md](configuration.md)) |
-| Reads | Filter on partition columns; select only needed columns; batch appends ~100 MB+ |
+Engines connect with the Iceberg REST catalog config — Catalog URI `https://catalog.cloudflarestorage.com/{ACCOUNT_ID}/{BUCKET}`, warehouse `{ACCOUNT_ID}_{BUCKET}`, your token, and header `X-Iceberg-Access-Delegation: vended-credentials`. Copy-paste configs per engine: `config-examples/`.
 
 ## See Also
 
-- [api.md](api.md) — API details · [gotchas.md](gotchas.md) — troubleshooting
-- [pipelines/patterns.md](../pipelines/patterns.md) — streaming ingest
-- [r2-sql/patterns.md](../r2-sql/patterns.md) — SQL analytics
+- [api.md](api.md) · [gotchas.md](gotchas.md) · [pipelines/patterns.md](../pipelines/patterns.md) · [r2-sql/patterns.md](../r2-sql/patterns.md)

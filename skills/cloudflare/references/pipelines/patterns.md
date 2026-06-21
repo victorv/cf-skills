@@ -1,5 +1,7 @@
 # Pipelines Patterns
 
+Code-first patterns. For observability dataset/field schemas and Logpush dataset lists, pull `https://developers.cloudflare.com/pipelines/observability/metrics/` and `https://developers.cloudflare.com/pipelines/streams/logpush/`.
+
 ## Fire-and-Forget Producer
 
 ```typescript
@@ -47,8 +49,7 @@ export default {
     const events = items.map(i => ({
       event_id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
-      category: i.type,
-      amount: i.value,
+      category: i.type, amount: i.value,
     }));
     await env.EVENT_STREAM.send(events);
   },
@@ -57,12 +58,7 @@ export default {
 
 ## Logpush → Pipelines
 
-Pipelines is a native Logpush destination — ingest Cloudflare logs, transform with SQL, store as Iceberg/Parquet.
-
-| Scope | Datasets |
-|-------|----------|
-| Zone | `http_requests`, `firewall_events`, `dns_logs` |
-| Account | `workers_trace_events` |
+Pipelines is a native Logpush destination — ingest Cloudflare logs, transform with SQL, store as Iceberg/Parquet. For the current supported dataset list and field names, pull the Logpush doc above.
 
 ```sql
 INSERT INTO http_logs_sink
@@ -87,15 +83,11 @@ await Promise.all([
 ]);
 ```
 
-| Need | Use |
-|------|-----|
-| Long-term storage, SQL queries | Pipelines |
-| Immediate processing, retries, DLQ | Queues |
-| Both | Fan-out |
+Use Pipelines for long-term storage + SQL; Queues for immediate processing/retries/DLQ; both for fan-out.
 
 ## Observability (GraphQL Analytics)
 
-Same R2 API token works. Endpoint: `https://api.cloudflare.com/client/v4/graphql`.
+Same R2 API token works. Endpoint: `https://api.cloudflare.com/client/v4/graphql`. Datasets cover ingestion, processing (incl. `decodeErrors`), delivery, sink writes (`filesWritten`), and user/validation errors — see the metrics doc for the full dataset/field catalog.
 
 ```bash
 curl -X POST "https://api.cloudflare.com/client/v4/graphql" \
@@ -103,34 +95,15 @@ curl -X POST "https://api.cloudflare.com/client/v4/graphql" \
   -d '{"query": "query { viewer { accounts(filter: {accountTag: \"'$ACCOUNT_ID'\"}) { pipelinesIngestionAdaptiveGroups(filter: {pipelineId: \"PIPELINE-UUID-WITH-DASHES\", datetime_geq: \"2026-03-01T00:00:00Z\"}, limit: 10) { sum { ingestedRecords ingestedBytes } dimensions { datetimeHour } } } } }"}'
 ```
 
-| Dataset | Shows | Sum fields |
-|---------|-------|-----------|
-| `pipelinesIngestionAdaptiveGroups` | Ingested into streams | `ingestedRecords`, `ingestedBytes` |
-| `pipelinesOperatorAdaptiveGroups` | Processed, decode errors | `recordsIn`, `bytesIn`, `decodeErrors` |
-| `pipelinesDeliveryAdaptiveGroups` | Delivered to sinks | `deliveredBytes` |
-| `pipelinesSinkAdaptiveGroups` | Written to sinks | `recordsWritten`, `bytesWritten`, `filesWritten` |
-| `pipelinesUserErrorsAdaptiveGroups` | Dropped events (validation) | `count` (by `errorType`) |
-| `pipelinesUserErrorsAdaptive` | Detailed errors (24h) | — |
-
-Error types: `missing_field`, `type_mismatch`, `parse_failure`, `null_value`.
-
 > **Sink/pipeline IDs need dashes for GraphQL** but wrangler may show them without: `b909fe6e544844abbd63f6dcbc81d602` → `b909fe6e-5448-44ab-bd63-f6dcbc81d602`. Metrics take 5–10 min to populate.
 
 ### Detecting Silent Data Loss
 
 If a sink's bucket is deleted or its token expires, events are accepted but lost. Tell-tale: `recordsWritten > 0` but `filesWritten = 0`. Always verify data lands in R2 within the roll interval and R2 SQL returns expected counts.
 
-## Performance Tuning
-
-| Goal | Config |
-|------|--------|
-| Low latency | `--roll-interval 10` (many small files) |
-| Query performance | `--roll-interval 300` + automatic compaction |
-| Cost optimal | `--compression zstd --roll-interval 300` |
-
 ## Schema Evolution (Immutable Pipelines)
 
-Pipelines can't change. Use versioning + dual-write:
+Pipelines can't change. Version + dual-write:
 
 ```bash
 npx wrangler pipelines streams create events_v2 --schema-file v2.json
@@ -154,5 +127,4 @@ External APIs → Collector Worker (cron) → Pipeline → R2 (Iceberg) → Dash
 
 ## See Also
 
-- [configuration.md](configuration.md) · [api.md](api.md) · [gotchas.md](gotchas.md)
-- [r2-sql](../r2-sql/) — query ingested data
+- [configuration.md](configuration.md) · [api.md](api.md) · [gotchas.md](gotchas.md) · [r2-sql](../r2-sql/)

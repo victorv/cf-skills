@@ -1,6 +1,6 @@
 # Pipelines Configuration
 
-Create streams, sinks, and pipelines via the CLI, REST API, or Terraform.
+Templates for creating streams, sinks, and pipelines via CLI, REST, or Terraform. For the full flag/field list and allowed values, pull `https://developers.cloudflare.com/pipelines/reference/wrangler-commands/` and the streams/sinks/pipelines docs.
 
 ## Naming Rules
 
@@ -9,21 +9,18 @@ Create streams, sinks, and pipelines via the CLI, REST API, or Terraform.
 
 ## Schema (Structured Streams)
 
-Schema is a JSON object with a `fields` array. Each field has `name`, `type`, `required`.
+Schema is a JSON object with a `fields` array; each field has `name`, `type`, `required`.
 
 ```json
 {
   "fields": [
     { "name": "event_id", "type": "string", "required": true },
-    { "name": "timestamp", "type": "string", "required": false },
-    { "name": "amount", "type": "float64", "required": false },
-    { "name": "category", "type": "string", "required": false }
+    { "name": "amount", "type": "float64", "required": false }
   ]
 }
 ```
 
-**Types:** `string`, `bool`, `int32`, `int64`, `float32`, `float64`, `timestamp`, `json`, `binary`, `list`, `struct`.
-For `list`, add `"items": {"type": "string"}`. For `struct`, add a nested `"fields"` array.
+Field types include `string`, `bool`, `int32/64`, `float32/64`, `timestamp`, `json`, `binary`, `list`, `struct` (with nested `items`/`fields`). For the authoritative type list, see `https://developers.cloudflare.com/pipelines/sql-reference/sql-data-types/`.
 
 Unstructured streams (no schema) store everything in a single `value` column.
 
@@ -32,10 +29,8 @@ Unstructured streams (no schema) store everything in a single `value` column.
 ## Option A: Interactive (Simplest)
 
 ```bash
-npx wrangler pipelines setup
+npx wrangler pipelines setup   # creates stream + sink + pipeline, optionally bucket + catalog
 ```
-
-Creates stream + sink + pipeline, and optionally the bucket + catalog.
 
 ## Option B: Wrangler CLI (Explicit)
 
@@ -61,10 +56,7 @@ npx wrangler pipelines create my_pipeline \
   --sql "INSERT INTO my_sink SELECT * FROM my_stream"
 ```
 
-| Option | Values | Guidance |
-|--------|--------|----------|
-| `--compression` | `zstd`, `snappy`, `gzip` | `zstd` best ratio, `snappy` fastest |
-| `--roll-interval` | seconds | Prod 300+; dev 10 (creates many small files) |
+Tuning knobs (`--compression`, `--roll-interval`, `--roll-size`, etc.) and their allowed values/defaults change — pull the wrangler-commands and sinks docs rather than hardcoding. Rule of thumb: prod `--roll-interval 300+`, dev `10` (creates many small files).
 
 > **⚠️ Pipelines are immutable.** SQL, schema, and sink config can't be changed — delete and recreate.
 
@@ -78,22 +70,16 @@ curl -X POST "$BASE_URL/streams" -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" -d '{
     "name": "my_stream",
     "http": {"enabled": true, "authentication": false},
-    "schema": {"fields": [
-      {"name": "event_id", "type": "string", "required": true},
-      {"name": "amount", "type": "float64", "required": false}
-    ]}
+    "schema": {"fields": [{"name": "event_id", "type": "string", "required": true}]}
   }'
 
 # Sink — NOTE REST field names differ from CLI flags (see table)
 curl -X POST "$BASE_URL/sinks" -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" -d '{
-    "name": "my_sink",
-    "type": "r2_data_catalog",
-    "config": {
-      "bucket": "my-bucket", "namespace": "my_namespace",
-      "table_name": "my_table", "token": "'$API_TOKEN'",
-      "rolling_policy": {"interval_seconds": 300}
-    },
+    "name": "my_sink", "type": "r2_data_catalog",
+    "config": {"bucket": "my-bucket", "namespace": "my_namespace",
+               "table_name": "my_table", "token": "'$API_TOKEN'",
+               "rolling_policy": {"interval_seconds": 300}},
     "format": {"type": "parquet"}
   }'
 
@@ -103,7 +89,7 @@ curl -X POST "$BASE_URL/pipelines" -H "Authorization: Bearer $API_TOKEN" \
   -d '{"name": "my_pipeline", "sql": "INSERT INTO my_sink SELECT * FROM my_stream;"}'
 ```
 
-**REST field names ≠ CLI flags:**
+**REST field names ≠ CLI flags** (common failure — not obvious from docs):
 
 | REST (config body) | CLI flag | Gotcha |
 |--------------------|----------|--------|
@@ -116,18 +102,14 @@ curl -X POST "$BASE_URL/pipelines" -H "Authorization: Bearer $API_TOKEN" \
 
 ```jsonc
 // wrangler.jsonc
-{
-  "pipelines": [
-    { "stream": "<STREAM_ID>", "binding": "MY_STREAM" }
-  ]
-}
+{ "pipelines": [ { "stream": "<STREAM_ID>", "binding": "MY_STREAM" } ] }
 ```
 
-> The binding field is `"stream"` as of June 2026 (was `"pipeline"`, still accepted). Use the **stream ID** (`wrangler pipelines streams list`), not the pipeline ID. Redeploy after adding a binding.
-
-Generate typed bindings with `npx wrangler types` → `Pipeline<Cloudflare.MyStreamRecord>` from `cloudflare:pipelines`.
+> Binding field is `"stream"` as of June 2026 (was `"pipeline"`, still accepted). Use the **stream ID** (`wrangler pipelines streams list`), not the pipeline ID. Redeploy after adding. Generate typed bindings with `npx wrangler types` → `Pipeline<Cloudflare.MyStreamRecord>` from `cloudflare:pipelines`.
 
 ## Terraform
+
+Resources: `cloudflare_pipeline_stream`, `cloudflare_pipeline_sink`, `cloudflare_pipeline`. For current attribute schemas pull `https://developers.cloudflare.com/pipelines/reference/terraform/`.
 
 ```hcl
 resource "cloudflare_pipeline_stream" "my_stream" {
@@ -162,25 +144,12 @@ resource "cloudflare_pipeline" "my_pipeline" {
 
 ## Credentials
 
-| Type | Permission | Source |
-|------|------------|--------|
-| Catalog token (Iceberg sink) | R2 Storage Admin R&W + R2 Data Catalog R&W | Dashboard → R2 → API tokens |
-| R2 credentials (raw sink) | Object Read & Write | `wrangler r2 bucket create` output |
-| HTTP ingest token | Workers Pipelines Send | Dashboard → Workers → API tokens (only if stream auth enabled) |
-
-## Complete Example
-
-```bash
-npx wrangler r2 bucket create my-bucket
-npx wrangler r2 bucket catalog enable my-bucket
-npx wrangler pipelines streams create my_stream --schema-file schema.json
-npx wrangler pipelines sinks create my_sink --type r2-data-catalog \
-  --bucket my-bucket --namespace my_ns --table my_table --catalog-token $API_TOKEN
-npx wrangler pipelines create my_pipeline --sql "INSERT INTO my_sink SELECT * FROM my_stream"
-npx wrangler deploy
-```
+| Type | Permission |
+|------|------------|
+| Catalog token (Iceberg sink) | R2 Storage Admin R&W + R2 Data Catalog R&W |
+| R2 credentials (raw sink) | Object Read & Write |
+| HTTP ingest token | Workers Pipelines Send (only if stream auth enabled) |
 
 ## See Also
 
-- [api.md](api.md) — sending events, REST API, lifecycle
-- [gotchas.md](gotchas.md) — immutability, REST≠CLI, limits
+- [api.md](api.md) — sending events, REST API, lifecycle · [gotchas.md](gotchas.md) — immutability, REST≠CLI

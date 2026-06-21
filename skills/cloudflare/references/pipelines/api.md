@@ -1,12 +1,12 @@
 # Pipelines API Reference
 
+Code templates and verified behavior. For the full SQL function set and HTTP status semantics, pull `https://developers.cloudflare.com/pipelines/sql-reference/` and the streams docs.
+
 ## Worker Binding Interface
 
 ```typescript
 // from cloudflare:pipelines / @cloudflare/workers-types
-interface Pipeline<T = any> {
-  send(records: T[]): Promise<void>;
-}
+interface Pipeline<T = any> { send(records: T[]): Promise<void>; }
 
 interface Env { MY_STREAM: Pipeline; }
 
@@ -19,10 +19,9 @@ export default {
 ```
 
 - `send()` takes an **array**, returns `Promise<void>` (no confirmation payload).
-- Throws on network errors — wrap in try/catch, or use `ctx.waitUntil()` for fire-and-forget.
-- Validation errors are **not** thrown here (deferred during processing — see gotchas).
-
-**Limits:** 1 MB per request, 5 MB/s per stream. Batch ~100 events.
+- Throws on network errors — wrap in try/catch or use `ctx.waitUntil()` for fire-and-forget.
+- Validation errors are **not** thrown here (deferred during processing — see [gotchas.md](gotchas.md)).
+- Payload/rate limits apply — check `https://developers.cloudflare.com/pipelines/platform/limits/` before sizing batches.
 
 ## HTTP Ingest
 
@@ -40,20 +39,10 @@ curl -X POST https://{stream-id}.ingest.cloudflare.com \
 
 # Single event — auto-wrapped in an array
 curl -X POST https://{stream-id}.ingest.cloudflare.com \
-  -H "Content-Type: application/json" \
-  -d '{"event_id":"evt-3","amount":9.99}'
+  -H "Content-Type: application/json" -d '{"event_id":"evt-3","amount":9.99}'
 ```
 
-If the stream has authentication enabled, add `-H "Authorization: Bearer $TOKEN"` (token needs **Workers Pipelines Send**).
-
-| Code | Meaning | Action |
-|------|---------|--------|
-| 200 | Accepted | Success (not yet flushed) |
-| 400 | Invalid format | Check JSON, schema match |
-| 401 | Auth failed | Verify token |
-| 413 | Payload too large | Split to <1 MB |
-| 429 | Rate limited | Back off (>5 MB/s/stream) |
-| 5xx | Server error | Retry with backoff |
+If stream auth is enabled, add `-H "Authorization: Bearer $TOKEN"` (token needs **Workers Pipelines Send**). Standard HTTP status codes apply (400 invalid, 401 auth, 413 too large, 429 rate-limited, 5xx retry).
 
 > **JSON only** — no Avro, Protobuf, or CSV input.
 
@@ -90,16 +79,12 @@ curl -X DELETE "$BASE_URL/streams/{id}"   -H "Authorization: Bearer $API_TOKEN"
 
 ## Pipeline SQL (Transforms)
 
-Row-level only — no GROUP BY, no aggregation. CTEs and `UNNEST` are supported.
+Row-level only — no GROUP BY/aggregation. CTEs (`WITH`) and `UNNEST` are supported. Full function list: `https://developers.cloudflare.com/pipelines/sql-reference/`.
 
 ```sql
--- Passthrough
+-- Passthrough / filter / enrich
 INSERT INTO my_sink SELECT * FROM my_stream;
-
--- Filter
 INSERT INTO my_sink SELECT * FROM my_stream WHERE amount > 10;
-
--- Transform / enrich
 INSERT INTO my_sink
 SELECT event_id, UPPER(category) AS category, amount * 1.1 AS amount_with_tax
 FROM my_stream;
@@ -112,11 +97,7 @@ INSERT INTO my_sink SELECT * FROM filtered;
 SELECT UNNEST(tags) AS tag FROM my_stream;
 ```
 
-Supported: string functions, regex, hashing (`sha256`), JSON extraction, timestamp conversion (`to_timestamp_micros`), conditional (`CASE`), `CAST`, `COALESCE`, math/comparison operators.
-
-**CAST target types:** `string`, `int32`, `int64`, `float32`, `float64`, `bool`, `timestamp`.
-
-Full reference: [Pipelines SQL Reference](https://developers.cloudflare.com/pipelines/sql-reference/).
+Supported categories: string, regex, hashing (`sha256`), JSON extraction, timestamp conversion, conditional (`CASE`), `CAST`, `COALESCE`, math/comparison operators.
 
 ## Verifying End-to-End Data Flow
 
@@ -139,6 +120,5 @@ curl -s -X POST \
 
 ## See Also
 
-- [configuration.md](configuration.md) — creating resources
-- [patterns.md](patterns.md) — producers, Logpush, observability
+- [configuration.md](configuration.md) — creating resources · [patterns.md](patterns.md) — producers, Logpush, observability
 - [r2-sql/api.md](../r2-sql/api.md) — querying results

@@ -1,33 +1,22 @@
 # R2 SQL Configuration
 
+Auth and setup. For the current permission matrix and wrangler flags, pull `https://developers.cloudflare.com/r2-sql/reference/wrangler-commands/` and the R2 Data Catalog manage-catalogs doc.
+
 ## Prerequisites
 
-- R2 bucket with Data Catalog enabled
-- R2 API token with the right permissions
+- R2 bucket with Data Catalog enabled ([r2-data-catalog/configuration.md](../r2-data-catalog/configuration.md))
+- R2 API token: **R2 Storage Admin Read & Write** (includes R2 SQL Read), or add **R2 SQL Read** explicitly
 - Wrangler CLI (for CLI queries)
 
-## Enable R2 Data Catalog
+> Open-beta limitation: R2 Storage **Admin Read & Write is required even for read-only R2 SQL queries**.
 
-R2 SQL queries Iceberg tables in R2 Data Catalog — enable it on the bucket first.
+## Enable Catalog + Get Warehouse
 
 ```bash
 npx wrangler r2 bucket catalog enable my-bucket
 ```
 
-Output gives the **Warehouse** (`{ACCOUNT_ID}_{BUCKET}`) and **Catalog URI**. You query by **warehouse** name. See [r2-data-catalog/configuration.md](../r2-data-catalog/configuration.md) for full setup.
-
-## Create an API Token
-
-R2 SQL needs **R2 Storage Admin Read & Write** (which includes R2 SQL Read) — or, where available, add **R2 SQL Read** explicitly.
-
-Dashboard → **R2** → **Manage R2 API tokens** → **Create API token** → **Admin Read & Write**. Copy the token (shown once).
-
-| Permission | Grants |
-|------------|--------|
-| R2 Storage Admin Read & Write | Storage ops + R2 SQL queries + Data Catalog ops |
-| R2 SQL Read | SQL queries only |
-
-> Open-beta limitation: R2 Storage **Admin Read & Write is required even for read-only R2 SQL queries**. May change at GA.
+You query by **warehouse** name (`{ACCOUNT_ID}_{BUCKET}`), shown in the output alongside the Catalog URI.
 
 ## Configure Auth
 
@@ -35,19 +24,17 @@ Dashboard → **R2** → **Manage R2 API tokens** → **Create API token** → *
 
 ```bash
 export WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
-# or a .env file in the project dir (auto-loaded):
-# WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
+# or a .env file in the project dir (auto-loaded): WRANGLER_R2_SQL_AUTH_TOKEN=<your-token>
 ```
 
-> Wrangler does **not** use the OAuth session from `wrangler login` for R2 SQL — the env var is required.
+> Wrangler does **not** use the `wrangler login` OAuth session for R2 SQL — the env var is required.
 
 ### REST API
 
 ```bash
 curl -X POST \
   "https://api.sql.cloudflarestorage.com/api/v1/accounts/$ACCOUNT_ID/r2-sql/query/$BUCKET" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"query": "SELECT * FROM default.my_table LIMIT 10"}'
 ```
 
@@ -58,16 +45,6 @@ npx wrangler r2 sql query "${ACCOUNT_ID}_my-bucket" "SHOW DATABASES"
 npx wrangler r2 sql query "${ACCOUNT_ID}_my-bucket" "SHOW TABLES IN default"
 ```
 
-## Troubleshooting
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Token authentication failed | Missing/invalid token | Set `WRANGLER_R2_SQL_AUTH_TOKEN`; token needs Admin R&W |
-| Catalog not enabled on bucket | Catalog off | `wrangler r2 bucket catalog enable <bucket>` |
-| Permission denied | Insufficient perms | Use Admin Read & Write token |
-| Table not found | Wrong warehouse/namespace | `SHOW DATABASES`, `SHOW TABLES IN <ns>` |
-
 ## See Also
 
-- [r2-data-catalog/configuration.md](../r2-data-catalog/configuration.md) — token + catalog detail
-- [api.md](api.md) — SQL syntax · [patterns.md](patterns.md) — query examples
+- [api.md](api.md) — SQL syntax · [patterns.md](patterns.md) — query examples · [gotchas.md](gotchas.md) — troubleshooting
