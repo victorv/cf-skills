@@ -35,7 +35,7 @@ The user pasted the prompt. You are in a multi-step dialog. Detect what you can,
 
 1. **Brief acknowledge.** One sentence: "I'll run Turnstile setup end to end. That's: check auth, scan the codebase, create the widget, embed it on the right forms, wire server-side siteverify, validate. Proceed?" **[wait for user]** Do NOT present a plan yet. Auth + scan come first.
 
-2. **CLI check.** Spin's helper scripts use `curl` against `api.cloudflare.com` and `npx wrangler whoami` for account enumeration. No persistent CLI install is required.
+2. **CLI check.** Spin's helper scripts use `curl` against `api.cloudflare.com` and `npx wrangler whoami` for account enumeration. Widget creation in Step 8 prefers `wrangler turnstile widget create` when the subcommand is available (Wrangler 4.109+), falling back to the bundled curl script otherwise. No persistent CLI install is required.
 
 3. **Auth + scope probe (FIRST irreversible action).** Run `scripts/auth-probe.sh`. Branch on `status`:
    - `ok`: continue to Step 4. The script already picked the account (single-account token, or one matching `$CLOUDFLARE_ACCOUNT_ID`).
@@ -58,7 +58,14 @@ The user pasted the prompt. You are in a multi-step dialog. Detect what you can,
 
 7. **Insertion plan.** Show the candidate list with `[recommended]` / `[skip by default]` markers; ask the user to confirm (numbers, "all", "recommended", or a list). **[wait for user]** If an existing CAPTCHA was detected, present a migration plan instead (see "Migrating from another CAPTCHA").
 
-8. **Widget creation.** Run `scripts/widget-create.sh --account-id <id> --name <name> --domains <list> --mode managed`. Report the sitekey. Capture the secret into a shell variable `WIDGET_SECRET`; never write it to disk except into the user's own env / secret store in Step 9.
+8. **Widget creation.** Prefer the wrangler CLI when its `turnstile widget` subcommand is available:
+
+   ```sh
+   npx wrangler turnstile widget create "<name>" \
+     --domain <d1> --domain <d2> ... --mode managed --json
+   ```
+
+   Parse `sitekey` and `secret` from stdout JSON. If wrangler is missing, older than the turnstile subcommand (`unknown command`), or otherwise fails, fall back to `scripts/widget-create.sh --account-id <id> --name <name> --domains <list> --mode managed`, which uses `curl` against the Cloudflare API directly. Report the sitekey. Capture the secret into a shell variable `WIDGET_SECRET`; never write it to disk except into the user's own env / secret store in Step 9.
 
 9. **Wire the integration.** State the contract: "I'll embed the widget on each chosen form and add a canonical siteverify call inside your existing submit handler, gated on `success === true`. The handler logic stays the same. The secret lives in your env as `TURNSTILE_SECRET`." Ask "yes" / "show". **[wait for user]** If "show", print unified diffs and ask again. Do NOT propose alternate behavior (mail delivery, custom backends).
 
